@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deep Work Concierge - Setup</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1e293b;
+            color: white;
+        }
+        .wizard {
+            max-width: 500px;
+            margin: 0 auto;
+            background: #334155;
+            border-radius: 12px;
+            padding: 30px;
+        }
+        .step {
+            display: none;
+        }
+        .step.active {
+            display: block;
+        }
+        .step-indicator {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+        }
+        .step-dot {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #64748b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .step-dot.completed {
+            background: #22c55e;
+        }
+        .step-dot.current {
+            background: #3b82f6;
+            border: 2px solid #60a5fa;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+        }
+        input:focus, select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            margin-right: 10px;
+        }
+        .btn:hover {
+            background: #2563eb;
+        }
+        .btn:disabled {
+            background: #64748b;
+            cursor: not-allowed;
+        }
+        .status-box {
+            background: #1e293b;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .success { border-left: 4px solid #22c55e; }
+        .warning { border-left: 4px solid #f59e0b; }
+        .error { border-left: 4px solid #ef4444; }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .spinner {
+            border: 4px solid #475569;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="wizard">
+        <h1 style="text-align: center; margin-bottom: 30px;">Deep Work Concierge Setup</h1>
+        
+        <div class="step-indicator">
+            <div class="step-dot current" id="dot-0">1</div>
+            <div class="step-dot" id="dot-1">2</div>
+            <div class="step-dot" id="dot-2">3</div>
+            <div class="step-dot" id="dot-3">4</div>
+            <div class="step-dot" id="dot-4">5</div>
+        </div>
+
+        <!-- Step 1: Welcome -->
+        <div class="step active" id="step-0">
+            <h2 style="text-align: center; margin-bottom: 20px;">🖥️ Welcome</h2>
+            <p style="text-align: center; color: #94a3b8; margin-bottom: 30px;">
+                Connect your ESP32 to this PC's WiFi and server.<br>
+                Takes about 2 minutes.
+            </p>
+            <button class="btn" onclick="nextStep()">Get Started →</button>
+        </div>
+
+        <!-- Step 2: Network -->
+        <div class="step" id="step-1">
+            <h2>Network Details</h2>
+            <div id="wifi-status" class="status-box">
+                <div style="text-align: center;">Detecting WiFi...</div>
+            </div>
+            <div class="form-group">
+                <label for="wifi-password">WiFi Password</label>
+                <input type="password" id="wifi-password" placeholder="Enter WiFi password">
+            </div>
+            <div id="network-error" class="status-box error" style="display: none;"></div>
+            <button class="btn" onclick="validateNetwork()">Next →</button>
+        </div>
+
+        <!-- Step 3: ESP32 Port -->
+        <div class="step" id="step-2">
+            <h2>Connect ESP32 via USB</h2>
+            <p style="color: #94a3b8; margin-bottom: 20px;">Plug in your ESP32 then click Detect.</p>
+            <div id="port-status" class="status-box">
+                <div style="text-align: center;">Scanning ports...</div>
+            </div>
+            <div class="form-group">
+                <label for="com-port">COM Port</label>
+                <select id="com-port">
+                    <option value="">Select port...</option>
+                </select>
+            </div>
+            <button class="btn" onclick="scanPorts()" style="margin-bottom: 10px;">🔄 Re-scan</button>
+            <div id="port-error" class="status-box error" style="display: none;"></div>
+            <button class="btn" onclick="validatePort()">Next →</button>
+        </div>
+
+        <!-- Step 4: Flash -->
+        <div class="step" id="step-3">
+            <h2 style="text-align: center;">Flashing ESP32</h2>
+            <p style="text-align: center; color: #94a3b8; margin-bottom: 30px;">Keep USB plugged in.</p>
+            
+            <div id="flash-status" class="loading">
+                <div class="spinner"></div>
+                <div id="flash-message">Sending configuration to ESP32...</div>
+            </div>
+            
+            <button id="flash-btn" class="btn" onclick="flashESP32()">🚀 Send Credentials</button>
+            <div id="flash-error" class="status-box error" style="display: none; margin-top: 20px;"></div>
+        </div>
+
+        <!-- Step 5: Done -->
+        <div class="step" id="step-4">
+            <div style="text-align: center;">
+                <div style="font-size: 60px; margin-bottom: 20px;">🎉</div>
+                <h2 style="margin-bottom: 20px;">All Done!</h2>
+                <div class="status-box success" style="text-align: left;">
+                    <p>✅ Unplug USB cable</p>
+                    <p>✅ Power ESP32 externally</p>
+                    <p>✅ It connects to WiFi + this server automatically</p>
+                </div>
+                <button class="btn" onclick="window.location.href='/'" style="margin-top: 20px;">Open Dashboard →</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStep = 0;
+        let wifiInfo = { ssid: '', ip: '' };
+        let selectedPort = '';
+
+        function showStep(step) {
+            document.querySelectorAll('.step').forEach(el => el.classList.remove('active'));
+            document.getElementById(`step-${step}`).classList.add('active');
+            
+            document.querySelectorAll('.step-dot').forEach((el, i) => {
+                el.classList.remove('current', 'completed');
+                if (i < step) el.classList.add('completed');
+                else if (i === step) el.classList.add('current');
+            });
+
+            if (step === 1) loadWifiInfo();
+            if (step === 2) scanPorts();
+        }
+
+        function nextStep() {
+            currentStep++;
+            showStep(currentStep);
+        }
+
+        async function loadWifiInfo() {
+            try {
+                const response = await fetch('/api/wifi');
+                wifiInfo = await response.json();
+                document.getElementById('wifi-status').innerHTML = `
+                    <div><strong>WiFi Network:</strong> <span style="color: #22c55e;">${wifiInfo.ssid || 'Not detected'}</span></div>
+                    <div><strong>Server IP:</strong> <span style="color: #3b82f6;">${wifiInfo.ip}</span></div>
+                    <div><strong>Server Port:</strong> <span style="color: #3b82f6;">8080</span></div>
+                `;
+            } catch (error) {
+                document.getElementById('wifi-status').innerHTML = '<div style="color: #ef4444;">Failed to detect WiFi</div>';
+            }
+        }
+
+        function validateNetwork() {
+            const password = document.getElementById('wifi-password').value;
+            const errorEl = document.getElementById('network-error');
+            
+            if (!password) {
+                errorEl.textContent = 'Enter your WiFi password.';
+                errorEl.style.display = 'block';
+                return;
+            }
+            
+            if (!wifiInfo.ssid) {
+                errorEl.textContent = 'WiFi not detected. Check your connection.';
+                errorEl.style.display = 'block';
+                return;
+            }
+            
+            errorEl.style.display = 'none';
+            nextStep();
+        }
+
+        async function scanPorts() {
+            try {
+                const response = await fetch('/api/ports');
+                const data = await response.json();
+                const select = document.getElementById('com-port');
+                const statusEl = document.getElementById('port-status');
+                
+                select.innerHTML = '<option value="">Select port...</option>';
+                
+                if (data.auto) {
+                    selectedPort = data.auto;
+                    statusEl.innerHTML = `<div class="success">✅ Found on <strong>${data.auto}</strong></div>`;
+                    select.value = data.auto;
+                } else {
+                    statusEl.innerHTML = `<div class="warning">⚠️ Not auto-detected. Select manually.</div>`;
+                }
+                
+                data.ports.forEach(port => {
+                    const option = document.createElement('option');
+                    option.value = port.device;
+                    option.textContent = `${port.device} — ${port.description}`;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                document.getElementById('port-status').innerHTML = '<div style="color: #ef4444;">Failed to scan ports</div>';
+            }
+        }
+
+        function validatePort() {
+            selectedPort = document.getElementById('com-port').value;
+            const errorEl = document.getElementById('port-error');
+            
+            if (!selectedPort) {
+                errorEl.textContent = 'Select a COM port.';
+                errorEl.style.display = 'block';
+                return;
+            }
+            
+            errorEl.style.display = 'none';
+            nextStep();
+        }
+
+        async function flashESP32() {
+            const password = document.getElementById('wifi-password').value;
+            const flashBtn = document.getElementById('flash-btn');
+            const loading = document.getElementById('flash-status');
+            const errorEl = document.getElementById('flash-error');
+            
+            flashBtn.style.display = 'none';
+            loading.style.display = 'block';
+            errorEl.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/provision', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        port: selectedPort,
+                        ssid: wifiInfo.ssid,
+                        password: password,
+                        server_ip: wifiInfo.ip,
+                        server_port: 8080
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('flash-message').textContent = '✅ ESP32 configured!';
+                    setTimeout(() => nextStep(), 1500);
+                } else {
+                    throw new Error(data.message);
+                }
+            } catch (error) {
+                errorEl.textContent = error.message;
+                errorEl.style.display = 'block';
+                flashBtn.style.display = 'block';
+                loading.style.display = 'none';
+            }
+        }
+
+        // Initialize
+        showStep(0);
+    </script>
+</body>
+</html>

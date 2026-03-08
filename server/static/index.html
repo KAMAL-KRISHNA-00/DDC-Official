@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deep Work Concierge</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1e293b;
+            color: white;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .status {
+            background: #334155;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .btn:hover {
+            background: #2563eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Deep Work Concierge</h1>
+        <div class="status">
+            <h2>System Status</h2>
+            <p>State: <span id="state">Loading...</span></p>
+            <p>Microphone: <span id="mic">Loading...</span></p>
+            <p>Last Response: <span id="response">None</span></p>
+        </div>
+        
+        <!-- Emergency Response Section -->
+        <div id="emergency-section" style="display: none;" class="status">
+            <h2>🚨 Emergency Response</h2>
+            <p>Someone needs your attention! Choose your response:</p>
+            <div>
+                <button class="btn" onclick="sendResponse('COMING')" style="background: #22c55e;">
+                    🏃‍♂️ Coming (2 min)
+                </button>
+                <button class="btn" onclick="sendResponse('WAIT')" style="background: #f59e0b;">
+                    ⏳ Please Wait
+                </button>
+                <button class="btn" onclick="sendResponse('DO_NOT_DISTURB')" style="background: #ef4444;">
+                    🔕 Do Not Disturb
+                </button>
+            </div>
+        </div>
+        <div>
+            <button class="btn" onclick="checkStatus()">Refresh Status</button>
+            <button class="btn" onclick="goToSetup()">Setup</button>
+        </div>
+    </div>
+
+    <script>
+        let currentEmergencyResponse = null;
+        
+        function checkStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Status data:', data);
+                    document.getElementById('state').textContent = data.state;
+                    document.getElementById('mic').textContent = data.mic_muted ? 'Muted' : 'Active';
+                    document.getElementById('response').textContent = data.last_response || 'None';
+                    
+                    // Show/hide emergency section
+                    const emergencySection = document.getElementById('emergency-section');
+                    if (data.state === 'EMERGENCY_PENDING') {
+                        emergencySection.style.display = 'block';
+                        console.log('Showing emergency section');
+                    } else {
+                        emergencySection.style.display = 'none';
+                        console.log('Hiding emergency section');
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        function sendResponse(response) {
+            console.log('Sending response:', response);
+            fetch('/api/emergency/respond', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({response: response})
+            })
+            .then(r => r.json())
+            .then(data => {
+                console.log('Response result:', data);
+                if(data.success) {
+                    document.getElementById('emergency-section').style.display = 'none';
+                    currentEmergencyResponse = response;
+                    // Force status refresh after response
+                    setTimeout(() => checkStatus(), 500);
+                } else {
+                    console.error('Response failed:', data.message);
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        }
+
+        function goToSetup() {
+            window.location.href = '/setup';
+        }
+
+        // Load status on page load
+        checkStatus();
+        
+        // Refresh status every 2 seconds
+        setInterval(checkStatus, 2000);
+        
+        // Listen for Socket.IO updates
+        const socket = io();
+        socket.on('state_update', function(data) {
+            console.log('Socket.IO update:', data);
+            document.getElementById('state').textContent = data.state;
+            document.getElementById('mic').textContent = data.mic_muted ? 'Muted' : 'Active';
+            document.getElementById('response').textContent = data.last_response || 'None';
+            
+            // Show/hide emergency section based on state
+            const emergencySection = document.getElementById('emergency-section');
+            if (data.state === 'EMERGENCY_PENDING') {
+                emergencySection.style.display = 'block';
+            } else {
+                emergencySection.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

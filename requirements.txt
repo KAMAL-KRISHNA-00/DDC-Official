@@ -1,0 +1,11 @@
+flask>=3.0
+flask-socketio>=5.3
+flask-cors>=4.0
+python-socketio>=5.10
+psutil>=5.9
+pycaw>=20230407
+comtypes>=1.2
+plyer>=2.1
+pyserial>=3.5
+eventlet>=0.35
+Pillow>=10.0

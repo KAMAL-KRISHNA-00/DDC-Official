@@ -1,0 +1,15 @@
+# Normalize all text files to LF in the repo, CRLF on Windows checkout
+* text=auto eol=lf
+
+# Batch files must stay CRLF or they break on Windows
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files — never touch line endings
+*.exe binary
+*.dll binary
+*.so  binary
+*.pyd binary
+*.png binary
+*.jpg binary
+*.ico binary
