@@ -19,6 +19,6 @@ def _open_browser():
 if __name__ == "__main__":
     app, socketio = create_app()
     threading.Thread(target=_open_browser, daemon=True).start()
-    print(f"\n  Deep Work Concierge → http://localhost:{PORT}\n")
+    print(f"\n  Deep Work Concierge -> http://localhost:{PORT}\n")
     socketio.run(app, host="0.0.0.0", port=PORT,
-                 debug=False, use_reloader=False)
+                 debug=False, use_reloader=False, allow_unsafe_werkzeug=True)
