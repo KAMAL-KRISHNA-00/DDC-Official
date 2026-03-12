@@ -20,7 +20,18 @@ String lastResponse = "";
 unsigned long lastReed = 0;
 unsigned long lastBtn = 0;
 bool wifiOk = false;
-unsigned long responseStartTime = 0; // Track when response was shown
+
+// Mutex ensures only one core touches the display at a time.
+// Without this, Core 0 (poll task) and Core 1 (loop) can write to the SH1106
+// simultaneously over I2C, causing display corruption and garbled output.
+SemaphoreHandle_t displayMutex = NULL;
+
+// responseStartTime is only written/read inside the poll task (Core 0).
+// Removed from loop() entirely so Core 1 never races against Core 0.
+static unsigned long responseStartTime = 0;
+
+// Edge-detect for emergency button: fire once per press, not while held.
+static bool lastBtnState = HIGH;
 
 void oledInit() {
   if (!display.begin(0x3C, true)) {
@@ -40,7 +51,12 @@ void oledInit() {
   Serial.println("[OLED] Initialized and cleared");
 }
 
+// Every display write is wrapped with mutex take/give so Core 0 and Core 1
+// never collide on the I2C bus.
 void showMsg(const char *line1, const char *line2 = "") {
+  if (displayMutex)
+    xSemaphoreTake(displayMutex, portMAX_DELAY);
+
   display.clearDisplay();
   display.setTextColor(SH110X_WHITE);
 
@@ -69,22 +85,34 @@ void showMsg(const char *line1, const char *line2 = "") {
   }
 
   display.display();
+
+  if (displayMutex)
+    xSemaphoreGive(displayMutex);
 }
 
+// EMERGENCY_PENDING always shows ATTENTION NEEDED regardless of whatever
+// last_response the server sends. This is a defensive two-layer fix:
+//   Layer 1 (server/services/controller.py): clears last_response on new
+//   emergency. Layer 2 (here): ESP32 ignores any stale last_response during
+//   EMERGENCY_PENDING.
 void showState(const String &state, const String &response = "") {
+
+  // Emergency always wins — never show a stale response over it
+  if (state == "EMERGENCY_PENDING") {
+    showMsg("ATTENTION", "NEEDED");
+    return;
+  }
+
+  // For all other states, show response only when one is actively set
   if (response.length() > 0 && response != "null") {
     if (response == "WAIT") {
       showMsg("PLEASE", "WAIT");
-      responseStartTime = millis(); // Start timer
     } else if (response == "DO_NOT_DISTURB") {
       showMsg("DO NOT", "DISTURB");
-      responseStartTime = millis(); // Start timer
     } else if (response == "COMING") {
       showMsg("COMING", "2 MINUTES");
-      responseStartTime = millis(); // Start timer
     } else {
       showMsg(response.c_str());
-      responseStartTime = millis(); // Start timer
     }
     return;
   }
@@ -95,8 +123,6 @@ void showState(const String &state, const String &response = "") {
     showMsg("MEETING", "IN PROGRESS");
   else if (state == "INTERRUPTED")
     showMsg("MEETING", "INTERRUPTED");
-  else if (state == "EMERGENCY_PENDING")
-    showMsg("ATTENTION", "NEEDED");
   else if (state == "DISCONNECTED")
     showMsg("SERVER", "OFFLINE");
   else
@@ -219,6 +245,58 @@ String buildURL(const char *path) {
   return "http://" + serverIP + ":" + String(serverPort) + path;
 }
 
+// Fetch current state immediately and show it on the OLED.
+// Called once after WiFi connects so the display never sits on
+// "WIFI OK" waiting for the poll task's first cycle.
+void fetchInitialState() {
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  HTTPClient http;
+  http.begin(buildURL("/api/room/status")); // no ?wait=1 — instant response
+  http.setTimeout(5000);
+  http.addHeader("Accept", "application/json");
+
+  int code = http.GET();
+  if (code == 200) {
+    String body = http.getString();
+    Serial.printf("[Init] %s\n", body.c_str());
+
+    String newState = "";
+    String newResponse = "";
+
+    int si = body.indexOf("\"state\":\"");
+    if (si >= 0) {
+      si += 9;
+      int ei = body.indexOf("\"", si);
+      if (ei > si)
+        newState = body.substring(si, ei);
+    }
+
+    int ri = body.indexOf("\"last_response\":\"");
+    if (ri >= 0) {
+      ri += 17;
+      int re = body.indexOf("\"", ri);
+      if (re > ri)
+        newResponse = body.substring(ri, re);
+    }
+
+    // Defensive: always clear response when in EMERGENCY_PENDING
+    if (newState == "EMERGENCY_PENDING")
+      newResponse = "";
+
+    currentState = newState;
+    lastResponse = newResponse;
+    showState(currentState, lastResponse);
+    Serial.printf("[Init] Initial state: %s\n", currentState.c_str());
+  } else {
+    Serial.printf("[Init] Failed HTTP %d — showing IDLE fallback\n", code);
+    showMsg("ROOM", "AVAILABLE"); // safe fallback if server unreachable
+  }
+
+  http.end();
+}
+
 bool httpPost(const char *path, const char *jsonBody) {
   if (WiFi.status() != WL_CONNECTED)
     return false;
@@ -236,7 +314,8 @@ bool httpPost(const char *path, const char *jsonBody) {
 }
 
 void httpPollTask(void *param) {
-  vTaskDelay(pdMS_TO_TICKS(2000));
+  // No startup delay — fetchInitialState() already showed the correct
+  // state before this task was created.
 
   for (;;) {
     ensureWiFi();
@@ -276,24 +355,38 @@ void httpPollTask(void *param) {
           newResponse = body.substring(ri, re);
       }
 
+      // Defensive: force-clear response when EMERGENCY_PENDING regardless
+      // of what the server echoes (two-layer fix, see controller.py).
+      if (newState == "EMERGENCY_PENDING") {
+        newResponse = "";
+        responseStartTime = 0; // no response timer during emergency
+      }
+
+      // Check if the response display timer has expired (10 seconds)
+      if (responseStartTime > 0 && (millis() - responseStartTime > 10000)) {
+        responseStartTime = 0;
+        lastResponse = ""; // expire the shown response
+        newResponse = "";
+        Serial.println("[Poll] Response display expired — reverting to state");
+      }
+
       if (newState != currentState || newResponse != lastResponse) {
         currentState = newState;
         lastResponse = newResponse;
+
+        // Start timer only when a real response is being displayed
+        if (lastResponse.length() > 0 && currentState != "EMERGENCY_PENDING") {
+          responseStartTime = millis();
+        } else {
+          responseStartTime = 0;
+        }
+
         showState(currentState, lastResponse);
         Serial.printf("[Poll] State: %s | Response: %s\n", currentState.c_str(),
                       lastResponse.c_str());
-        Serial.println("[OLED] Display updated with new state/response");
+        Serial.println("[OLED] Display updated");
       } else {
-        Serial.printf("[Poll] Current: %s/%s, New: %s/%s\n",
-                      currentState.c_str(), lastResponse.c_str(),
-                      newState.c_str(), newResponse.c_str());
-        Serial.println("[Poll] No state change detected - forcing update");
-        // Force update for emergency responses
-        if (newResponse != "" && newResponse != lastResponse) {
-          lastResponse = newResponse;
-          showState(currentState, lastResponse);
-          Serial.println("[OLED] Forced update for emergency response");
-        }
+        Serial.println("[Poll] No state change");
       }
 
     } else if (code < 0) {
@@ -319,20 +412,26 @@ void setup() {
   Serial.println("  Deep Work Concierge v1.0");
   Serial.println("===========================");
 
+  // Create mutex before any display use or task creation.
+  displayMutex = xSemaphoreCreateMutex();
+  if (!displayMutex) {
+    Serial.println("[FATAL] Could not create display mutex");
+  }
+
   Wire.begin(OLED_SDA, OLED_SCL);
   oledInit();
   showMsg("DDC", "STARTING");
 
-  // Reset state on startup to clear any stale states
-  currentState = "IDLE";
+  // Reset all volatile state on every boot — clean slate even if the server
+  // still has old data in memory from before the reboot.
+  currentState = "UNKNOWN";
   lastResponse = "";
   responseStartTime = 0;
+  lastBtnState = HIGH;
 
   // ── GPIO ──────────────────────────────────────────────────
-  // Using GPIO32/33 which have proper internal pull-ups
-  // GPIO34/35 are INPUT-ONLY and cannot use INPUT_PULLUP
-  pinMode(REED_PIN, INPUT_PULLUP); // Built-in pull-up now works
-  pinMode(BTN_PIN, INPUT_PULLUP);  // Built-in pull-up now works
+  pinMode(REED_PIN, INPUT_PULLUP);
+  pinMode(BTN_PIN, INPUT_PULLUP);
 
   Serial.printf("[GPIO] Reed=%d, Button=%d\n", REED_PIN, BTN_PIN);
   Serial.println("[GPIO] Using GPIO32/33 with internal pull-ups");
@@ -361,6 +460,10 @@ void setup() {
 
   connectWiFi();
 
+  // Show actual room state immediately — don't leave "WIFI OK" on screen
+  // while waiting for the poll task's first cycle.
+  fetchInitialState();
+
   BaseType_t taskResult = xTaskCreatePinnedToCore(httpPollTask, "HTTPPollTask",
                                                   8192, NULL, 1, NULL, 0);
 
@@ -374,16 +477,10 @@ void setup() {
   Serial.printf("[Boot] Server: http://%s:%d\n", serverIP.c_str(), serverPort);
 }
 
+// loop() only handles physical inputs. All display updates happen exclusively
+// in httpPollTask() (Core 0), protected by the mutex.
 void loop() {
   unsigned long now = millis();
-
-  // Check if response display timer expired (10 seconds)
-  if (responseStartTime > 0 && (now - responseStartTime > 10000)) {
-    responseStartTime = 0;   // Reset timer
-    showState(currentState); // Return to current state display
-    Serial.println(
-        "[OLED] Response display expired - returning to current state");
-  }
 
   if (WiFi.status() != WL_CONNECTED && wifiOk) {
     wifiOk = false;
@@ -394,7 +491,6 @@ void loop() {
   // Reads LOW when door opens (internal pull-up = normally HIGH)
   if (digitalRead(REED_PIN) == LOW) {
     if (now - lastReed > DEBOUNCE_MS) {
-      // Double-check to prevent bounce
       delay(5);
       if (digitalRead(REED_PIN) == LOW) {
         lastReed = now;
@@ -404,19 +500,24 @@ void loop() {
     }
   }
 
-  // ── Emergency button ──────────────────────────────────────
-  // Reads LOW when pressed (internal pull-up = normally HIGH)
-  if (digitalRead(BTN_PIN) == LOW) {
-    if (now - lastBtn > DEBOUNCE_MS) {
-      // Double-check to prevent bounce
-      delay(5);
-      if (digitalRead(BTN_PIN) == LOW) {
-        lastBtn = now;
-        Serial.println("[Input] Emergency button pressed");
-        httpPost("/api/door/emergency", "{\"event\":\"REQUEST\"}");
-      }
+  // ── Emergency button — EDGE TRIGGERED ───────────────────
+  // Only fires on the falling edge (HIGH→LOW transition), not while held.
+  // This prevents sending repeated emergency requests while the button
+  // is pressed and held, which would spam the server.
+  bool btnState = digitalRead(BTN_PIN);
+  if (btnState == LOW && lastBtnState == HIGH) {
+    // Debounce: confirm the press is real after a short settle time
+    delay(DEBOUNCE_MS);
+    if (digitalRead(BTN_PIN) == LOW) {
+      Serial.println("[Input] Emergency button pressed");
+      httpPost("/api/door/emergency", "{\"event\":\"REQUEST\"}");
+      // Clear local response state immediately so there is no window where
+      // the old response flashes before the poll task gets EMERGENCY_PENDING.
+      lastResponse = "";
+      responseStartTime = 0;
     }
   }
+  lastBtnState = btnState;
 
   delay(50);
 }

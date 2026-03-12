@@ -75,11 +75,18 @@ class DDCController:
         return result
 
     def emergency_request(self) -> bool:
-        """Trigger the emergency FSM transition and show the notification popup."""
+        """Trigger the emergency FSM transition and show the notification popup.
+        
+        The popup is fire-and-forget — the user's button click on the popup
+        calls /api/emergency/respond, which routes to respond() asynchronously.
+        """
         logging.info(f"[Controller] Emergency request — current state: {self.state_machine.get_state()}")
 
         result = self.state_machine.emergency_request()
         if result:
+            # Clear stale response immediately so the ESP32 never sees an old
+            # last_response value echoed back during a new EMERGENCY_PENDING.
+            self.last_response = None
             notify_state_change()
             if self.socketio:
                 self.socketio.emit("state_update", self.get_status())
@@ -90,11 +97,17 @@ class DDCController:
             logging.warning("[Controller] Emergency request ignored — invalid state")
             return False
 
-
     def respond(self, response: str):
-        """response is 'WAIT', 'DO_NOT_DISTURB', or 'COMING'"""
+        """response is 'WAIT', 'DO_NOT_DISTURB', or 'COMING'.
+        
+        Resolves the emergency and stores the response so the ESP32
+        can display it after the state reverts to ACTIVE_MEETING/IDLE.
+        """
         self.last_response = response
         self.state_machine.resolve_emergency()
+        # If we resolved back to IDLE (no meeting was active), unmute audio.
+        if self.state_machine.get_state() == "IDLE":
+            self.audio.unmute()
         time.sleep(0.5)  # small delay so ESP32 sees the transition
         notify_state_change()
         if self.socketio:
