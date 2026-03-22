@@ -99,6 +99,17 @@ def api_door_emergency():
         return jsonify({"success": triggered})
     return jsonify({"success": False, "message": "Unknown event"}), 400
 
+
+@app.route("/api/interrupt/unmute", methods=["POST"])
+def api_interrupt_unmute():
+    """
+    Called by the mute-popup when user clicks 'Unmute Microphone'.
+    Immediately unmutes the mic and exits the INTERRUPTED state.
+    """
+    controller.manual_unmute()
+    return jsonify({"success": True})
+
+
 # ─────────────────────────────────────────────────────────────
 # BROWSER ENDPOINTS
 # ─────────────────────────────────────────────────────────────

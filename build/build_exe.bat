@@ -17,6 +17,7 @@ if not exist %PYTHON% goto :no_venv
   --onedir ^
   --windowed ^
   --name "DDC" ^
+  --icon="..\build\icon.ico" ^
   --add-data "static;static" ^
   --hidden-import=engineio.async_drivers.threading ^
   --hidden-import=engineio.async_drivers.eventlet ^

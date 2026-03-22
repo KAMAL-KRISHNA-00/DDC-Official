@@ -39,17 +39,38 @@ class DDCController:
 
     def _update(self):
         meeting_active = self.detector.detect_teams()
+
+        # ── Manual unmute detection ────────────────────────────────────────
+        # If the user manually unmutes the mic while we're in INTERRUPTED,
+        # treat it as self-resolution: exit INTERRUPTED immediately, notify,
+        # and skip the auto-unmute path below (mic is already unmuted).
+        if (self.state_machine.get_state() == "INTERRUPTED"
+                and not self.audio.is_muted()):
+            logging.info("[Controller] Manual unmute detected — exiting INTERRUPTED")
+            self.state_machine.cancel_interrupt(meeting_active)
+            Notifier.resume()               # immediate notification
+            notify_state_change()
+            if self.socketio:
+                self.socketio.emit("state_update", self.get_status())
+            self.previous_state = self.state_machine.get_state()
+            return  # next _update() cycle handles normal state tracking
+
         self.state_machine.update_meeting_status(meeting_active)
         state = self.state_machine.get_state()
 
-        # Side-effects on transition
+        # ── Side-effects on state transitions ─────────────────────────────
+        # Mute notification is fired immediately in door_interrupt() so we
+        # don't fire it here — that would cause a double notification.
         if state == "INTERRUPTED" and self.previous_state != "INTERRUPTED":
             self.audio.mute()
-            Notifier.interrupt()
+            # Notifier.interrupt() intentionally omitted — already called in door_interrupt()
 
         if state == "ACTIVE_MEETING" and self.previous_state == "INTERRUPTED":
-            self.audio.unmute()
-            Notifier.resume()
+            # Guard: only unmute + notify if mic is still muted.
+            # If user already manually unmuted, the early-return above handled it.
+            if self.audio.is_muted():
+                self.audio.unmute()
+                Notifier.resume()
 
         if state == "EMERGENCY_PENDING" and self.previous_state != "EMERGENCY_PENDING":
             logging.info("[Controller] State entered EMERGENCY_PENDING")
@@ -57,22 +78,38 @@ class DDCController:
         # Notify long-pollers + browser if state changed
         if state != self.previous_state:
             logging.info(f"[Controller] State → {state}")
-            notify_state_change()                          # wakes ESP32 long-poll
+            notify_state_change()
             if self.socketio:
-                self.socketio.emit("state_update",         # wakes browser
-                                   self.get_status())
+                self.socketio.emit("state_update", self.get_status())
 
         self.previous_state = state
+
 
     # ── Actions called from Flask routes ─────────────────────
 
     def door_interrupt(self) -> bool:
         result = self.state_machine.door_interrupt()
         if result:
+            # Mute immediately — don't wait for the _update() loop (up to 1s delay)
+            self.audio.mute()
+            Notifier.interrupt()
             notify_state_change()
             if self.socketio:
                 self.socketio.emit("state_update", self.get_status())
         return result
+
+    def manual_unmute(self):
+        """Called when user clicks 'Unmute Microphone' in the popup.
+        Immediately unmutes, exits INTERRUPTED, and updates all clients."""
+        logging.info("[Controller] Manual unmute via popup")
+        meeting_active = self.detector.detect_teams()
+        self.state_machine.cancel_interrupt(meeting_active)
+        self.audio.unmute()
+        Notifier.resume()
+        notify_state_change()
+        if self.socketio:
+            self.socketio.emit("state_update", self.get_status())
+
 
     def emergency_request(self) -> bool:
         """Trigger the emergency FSM transition and show the notification popup.
@@ -99,20 +136,34 @@ class DDCController:
 
     def respond(self, response: str):
         """response is 'WAIT', 'DO_NOT_DISTURB', or 'COMING'.
-        
-        Resolves the emergency and stores the response so the ESP32
-        can display it after the state reverts to ACTIVE_MEETING/IDLE.
+
+        Resolves the emergency, notifies the ESP32 to show the response,
+        then schedules a 5-second timer to clear the response so the
+        device reverts to the real meeting state automatically.
         """
         self.last_response = response
         self.state_machine.resolve_emergency()
         # If we resolved back to IDLE (no meeting was active), unmute audio.
         if self.state_machine.get_state() == "IDLE":
             self.audio.unmute()
-        time.sleep(0.5)  # small delay so ESP32 sees the transition
+        time.sleep(0.5)  # small delay so ESP32 sees the EMERGENCY_PENDING→state transition
         notify_state_change()
         if self.socketio:
             self.socketio.emit("state_update", self.get_status())
         logging.info(f"[Controller] Response sent: {response}")
+
+        # After 5 seconds, clear the response so:
+        #   1. ESP32 long-poll wakes and shows the real room state
+        #   2. Next emergency press shows a fresh popup (no stale response)
+        def _clear_response():
+            logging.info("[Controller] Clearing response after 5s display timeout")
+            self.last_response = None
+            notify_state_change()
+            if self.socketio:
+                self.socketio.emit("state_update", self.get_status())
+
+        threading.Timer(5.0, _clear_response).start()
+
 
     # ── Status payload ────────────────────────────────────────
 

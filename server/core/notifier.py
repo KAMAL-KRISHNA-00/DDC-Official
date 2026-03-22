@@ -96,7 +96,60 @@ $form.ShowDialog() | Out-Null
 
     @classmethod
     def interrupt(cls):
-        cls._notify("Door Interruption", "Microphone muted for privacy.")
+        """Mute notification + popup window to manually unmute."""
+        cls._notify("Microphone Muted", "Door interaction detected. Click to unmute.")
+        threading.Thread(target=cls._show_interrupt_popup, daemon=True).start()
+
+    @classmethod
+    def _show_interrupt_popup(cls):
+        """Show a popup with an Unmute button, just like the emergency popup."""
+        try:
+            if platform.system() == "Windows":
+                script = r'''
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+$api = "http://localhost:8080/api/interrupt/unmute"
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "MICROPHONE MUTED"
+$form.Size = New-Object System.Drawing.Size(300,140)
+$form.StartPosition = "CenterScreen"
+$form.TopMost = $true
+$form.FormBorderStyle = "FixedDialog"
+$form.MaximizeBox = $false
+
+$label = New-Object System.Windows.Forms.Label
+$label.Text = "Mic muted due to door interaction."
+$label.Location = New-Object System.Drawing.Point(20,20)
+$label.Size = New-Object System.Drawing.Size(260,30)
+$form.Controls.Add($label)
+
+$btnUnmute = New-Object System.Windows.Forms.Button
+$btnUnmute.Text = "Unmute Microphone"
+$btnUnmute.Location = New-Object System.Drawing.Point(80,65)
+$btnUnmute.Size = New-Object System.Drawing.Size(140,30)
+$btnUnmute.Add_Click({
+    try {
+        Invoke-WebRequest -Uri $api -Method POST `
+            -ContentType "application/json" -UseBasicParsing | Out-Null
+    } catch {}
+    $form.Close()
+})
+$form.Controls.Add($btnUnmute)
+
+$form.ShowDialog() | Out-Null
+'''
+                subprocess.Popen(
+                    ['powershell', '-NoProfile', '-NonInteractive', '-Command', script],
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            else:
+                cls._notify("Microphone Muted", "Open the dashboard to unmute.", timeout=30)
+        except Exception as e:
+            logging.error(f"[Notifier] Interrupt popup failed: {e}")
+
+
 
     @classmethod
     def resume(cls):

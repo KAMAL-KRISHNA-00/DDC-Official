@@ -90,6 +90,45 @@ void showMsg(const char *line1, const char *line2 = "") {
     xSemaphoreGive(displayMutex);
 }
 
+// Draws a ⚠️ warning icon using GFX primitives on the 128×64 OLED.
+// Triangle apex at top-center, exclamation mark inside.
+// Layout: icon left-half (60px wide), "INTERRUPTED" text right-half,
+// so both fit on screen simultaneously.
+void showWarning(const char *label = "INTERRUPTED") {
+  if (displayMutex)
+    xSemaphoreTake(displayMutex, portMAX_DELAY);
+
+  display.clearDisplay();
+  display.setTextColor(SH110X_WHITE);
+
+  // ── Warning triangle (left side, vertically centered) ──────
+  // Outer filled triangle: tip=(30,4), left=(2,58), right=(58,58)
+  display.fillTriangle(30, 4, 2, 58, 58, 58, SH110X_WHITE);
+  // Inner black triangle (hollow effect): tip=(30,12), left=(9,53),
+  // right=(51,53)
+  display.fillTriangle(30, 12, 9, 53, 51, 53, SH110X_BLACK);
+
+  // ── Exclamation mark inside the triangle ───────────────────
+  // Stem: 3px wide, from y=20 to y=44
+  display.fillRect(28, 20, 4, 22, SH110X_WHITE);
+  // Dot: 4×4 pixels at y=48
+  display.fillRect(28, 46, 4, 4, SH110X_WHITE);
+
+  // ── Label text (right half of screen) ──────────────────────
+  display.setTextSize(1);
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
+  // Right zone: x=65..127 (62px wide), center within it
+  int xPos = 65 + max(0, (int)((62 - w) / 2));
+  display.setCursor(xPos, 28);
+  display.print(label);
+
+  display.display();
+  if (displayMutex)
+    xSemaphoreGive(displayMutex);
+}
+
 // EMERGENCY_PENDING always shows ATTENTION NEEDED regardless of whatever
 // last_response the server sends. This is a defensive two-layer fix:
 //   Layer 1 (server/services/controller.py): clears last_response on new
@@ -99,7 +138,7 @@ void showState(const String &state, const String &response = "") {
 
   // Emergency always wins — never show a stale response over it
   if (state == "EMERGENCY_PENDING") {
-    showMsg("ATTENTION", "NEEDED");
+    showMsg("REQUEST", "SENT");
     return;
   }
 
@@ -122,7 +161,7 @@ void showState(const String &state, const String &response = "") {
   else if (state == "ACTIVE_MEETING")
     showMsg("MEETING", "IN PROGRESS");
   else if (state == "INTERRUPTED")
-    showMsg("MEETING", "INTERRUPTED");
+    showWarning("INTERRUPTED"); // ⚠️ icon + label
   else if (state == "DISCONNECTED")
     showMsg("SERVER", "OFFLINE");
   else
@@ -362,11 +401,15 @@ void httpPollTask(void *param) {
         responseStartTime = 0; // no response timer during emergency
       }
 
-      // Check if the response display timer has expired (10 seconds)
-      if (responseStartTime > 0 && (millis() - responseStartTime > 10000)) {
+      // Check if the response display timer has expired (5 seconds).
+      // Force-call showState() so the OLED updates immediately — without
+      // this the condition below won't trigger because newState/newResponse
+      // match lastState/lastResponse (both already empty).
+      if (responseStartTime > 0 && (millis() - responseStartTime > 5000)) {
         responseStartTime = 0;
         lastResponse = ""; // expire the shown response
         newResponse = "";
+        showState(currentState, ""); // force OLED back to room state
         Serial.println("[Poll] Response display expired — reverting to state");
       }
 
