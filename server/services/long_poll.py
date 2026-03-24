@@ -13,11 +13,13 @@ def notify_state_change():
         _version += 1
         _lock.notify_all()
 
-def wait_for_change(timeout: float = 30.0) -> bool:
+def wait_for_change(timeout: float = 20.0) -> bool:
     """
     Blocks until state changes or timeout expires.
     Returns True if state changed, False if timed out.
-    ESP32 uses a 30 s timeout then reconnects — normal behaviour.
+    Timeout is 20 s — well under most home-router NAT session limits
+    (which silently drop idle TCP connections at ~25-30 s).
+    The ESP32 reconnects immediately on timeout, so this is safe.
     """
     with _lock:
         snapshot = _version

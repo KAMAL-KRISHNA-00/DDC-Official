@@ -366,7 +366,7 @@ void httpPollTask(void *param) {
 
     HTTPClient http;
     http.begin(buildURL("/api/room/status?wait=1"));
-    http.setTimeout(35000); // server holds up to 30 s; give 5 s margin
+    http.setTimeout(25000); // server holds up to 20 s; give 5 s margin
     http.addHeader("Accept", "application/json");
 
     int code = http.GET();
