@@ -473,11 +473,11 @@ void setup() {
   lastBtnState = HIGH;
 
   // ── GPIO ──────────────────────────────────────────────────
-  pinMode(REED_PIN, INPUT_PULLUP);
-  pinMode(BTN_PIN, INPUT_PULLUP);
+  pinMode(DOOR_PIN,
+          INPUT); // Touch sensor — has its own output, no pull-up needed
+  pinMode(BTN_PIN, INPUT_PULLUP); // Emergency button — active LOW
 
-  Serial.printf("[GPIO] Reed=%d, Button=%d\n", REED_PIN, BTN_PIN);
-  Serial.println("[GPIO] Using GPIO32/33 with internal pull-ups");
+  Serial.printf("[GPIO] Door(Touch)=%d, Button=%d\n", DOOR_PIN, BTN_PIN);
 
   bool hasConfig = loadConfig();
 
@@ -530,14 +530,15 @@ void loop() {
     Serial.println("[Loop] WiFi lost");
   }
 
-  // ── Reed switch ───────────────────────────────────────────
-  // Reads LOW when door opens (internal pull-up = normally HIGH)
-  if (digitalRead(REED_PIN) == LOW) {
+  // ── Touch sensor (door) ───────────────────────────────────
+  // Outputs HIGH when touched; no debounce needed for capacitive but kept
+  // to prevent duplicate HTTP posts on a single touch.
+  if (digitalRead(DOOR_PIN) == HIGH) {
     if (now - lastReed > DEBOUNCE_MS) {
       delay(5);
-      if (digitalRead(REED_PIN) == LOW) {
+      if (digitalRead(DOOR_PIN) == HIGH) {
         lastReed = now;
-        Serial.println("[Input] Reed switch triggered");
+        Serial.println("[Input] Touch sensor triggered");
         httpPost("/api/door/event", "{\"event\":\"DOOR_INTERACTION\"}");
       }
     }
